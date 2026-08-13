@@ -1,0 +1,9 @@
+workspace = "mastadon/mastodon"
+
+[proxy]
+metadata-hints = ["project=mastodon"]
+
+[adapters.docker]
+tag = "mastodon-layer"
+cache-mode = "max"
+metadata-hints = ["lane=layer"]
