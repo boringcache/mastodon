@@ -1,0 +1,13 @@
+workspace = "mastadon/mastodon"
+
+[proxy]
+metadata-hints = ["project=mastodon"]
+
+[adapters.docker]
+tag = "mastodon-no-layer-ccache-mount"
+cache-mode = "max"
+metadata-hints = ["lane=no-layer-ccache-mount"]
+
+[adapters.ccache]
+tag = "mastodon-no-layer-ccache"
+metadata-hints = ["lane=no-layer-ccache-mount", "tool=ccache"]

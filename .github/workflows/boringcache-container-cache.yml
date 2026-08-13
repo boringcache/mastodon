@@ -145,3 +145,51 @@ jobs:
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
           BORINGCACHE_SAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
+
+  boringcache-no-layer-ccache-mount:
+    name: BoringCache no layer + ccache + mountcache / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build with BoringCache ccache and mountcache without layer reuse
+        id: cache
+        uses: boringcache/one@e24257b122813ad11d53b9ed024b474ca4946ad2 # v1.19.1
+        with:
+          cli-version: v1.19.1
+          trust-policy: auto
+          setup: none
+          mode: docker
+          working-directory: .github/boringcache/no-layer-ccache-mount
+          context: ../../..
+          dockerfile: Dockerfile
+          image: mastodon-boringcache-no-layer-ccache-mount
+          tags: test
+          platforms: ${{ matrix.platform }}
+          load: false
+          push: false
+          no-cache: true
+          provenance: false
+          build-args: |
+            MASTODON_VERSION_PRERELEASE=boringcache
+            MASTODON_VERSION_METADATA=${{ github.sha }}
+            SOURCE_COMMIT=${{ github.sha }}
+          docker-tool-cache: ccache
+          docker-mount-cache: true
+          diagnostics: summary
+          verify: wait
+          fail-on-cache-error: true
+          metadata-hints: lane=no-layer-ccache-mount,upstream=mastodon
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}

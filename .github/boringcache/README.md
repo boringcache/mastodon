@@ -4,23 +4,30 @@ This branch builds Mastodon's production `Dockerfile` on the same native
 GitHub-hosted runners used by the upstream multi-architecture workflow:
 `ubuntu-24.04` for `linux/amd64` and `ubuntu-24.04-arm` for `linux/arm64`.
 
-The workflow keeps three independent cache cohorts:
+The workflow keeps four independent cache cohorts:
 
 - GitHub Actions cache uses Mastodon's upstream `type=gha` cache shape and
   `build-${hashFiles('Dockerfile')}-${platform}` scope.
 - BoringCache layer cache reads the plan in `layer/.boringcache.toml`.
 - BoringCache layer + ccache + mountcache reads the root `.boringcache.toml`.
+- BoringCache no-layer + ccache + mountcache reads the plan in
+  `no-layer-ccache-mount/.boringcache.toml` and passes `no-cache: true`, so
+  every Dockerfile `RUN` executes while compiler and cache-mount contents can
+  still be restored.
 
-The separate BoringCache plans are deliberate: their Docker layer tags must
-not warm one another. Platform and Git ref scoping remain CLI-owned.
+The separate BoringCache plans are deliberate: their Docker, ccache, and
+mountcache tags must not warm one another. Platform and Git ref scoping remain
+CLI-owned.
 
 All lanes use the same Dockerfile. It owns the ccache compiler launcher, as
-required by the ccache adapter contract; only the composed BoringCache lane
-injects remote ccache settings. Mountcache offloads only Mastodon's existing
-BuildKit cache mounts for apt plus runtime-verified cache paths for Bundler,
-Corepack, and Yarn. The whole `/usr/local/bundle` is restored, reconciled with
-`Gemfile.lock`, cleaned, and copied to `/opt/bundle` so the final image retains
-it after BuildKit detaches the cache mount. Corepack uses
+required by the ccache adapter contract; only the two ccache + mountcache lanes
+inject remote ccache settings. The no-layer lane deliberately disables ordinary
+layer reuse while retaining those two independent cache surfaces. Mountcache
+offloads only Mastodon's existing BuildKit cache mounts for apt plus
+runtime-verified cache paths for Bundler, Corepack, and Yarn. The whole
+`/usr/local/bundle` is restored, reconciled with `Gemfile.lock`, cleaned, and
+copied to `/opt/bundle` so the final image retains it after BuildKit detaches the
+cache mount. Corepack uses
 `/root/.cache/node/corepack`; Yarn uses `/root/.yarn/berry/cache`, matching the
 defaults reported by the exact Node 24 and Yarn 4 toolchain used by this image.
 
