@@ -23,10 +23,19 @@ on:
 # using Github's runners.
 # The two-step process is adapted form:
 # https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
+#
+# Release, nightly, and security builds keep their existing cache:false contract:
+# every Docker step runs, including apt update. Repositories can opt in to BoringCache
+# compiler and cache-mount reuse with BORINGCACHE_ENABLED=true plus restore/save tokens.
+# Without that variable or either token, the existing GitHub Actions path remains active.
 jobs:
   # Build each (amd64 and arm64) image separately
   build-image:
     runs-on: ${{ startsWith(matrix.platform, 'linux/arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      # Release, nightly, and security builds deliberately run every Docker step.
+      # BoringCache only restores compiler outputs and explicit cache mounts.
+      BORINGCACHE_ENABLED: ${{ inputs.cache == false && vars.BORINGCACHE_ENABLED == 'true' && (secrets.BORINGCACHE_RESTORE_TOKEN != '' || (github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN != '')) && 'true' || 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,13 +51,16 @@ jobs:
           PUSH_TO_IMAGES: ${{ inputs.push_to_images }}
         run: |
           platform=${{ matrix.platform }}
-          echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
           # Transform multi-line variable into comma-separated variable
           image_names=${PUSH_TO_IMAGES//$'\n'/,}
           image_names_split=${image_names%,}
-          echo "IMAGE_NAMES=${image_names_split,,}" >> $GITHUB_ENV
+          echo "IMAGE_NAMES=${image_names_split,,}" >> "$GITHUB_ENV"
+          primary_image_name=${image_names_split%%,*}
+          echo "PRIMARY_IMAGE_NAME=${primary_image_name,,}" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        if: env.BORINGCACHE_ENABLED != 'true'
         id: buildx
 
       - name: Log in to Docker Hub
@@ -75,8 +87,41 @@ jobs:
           flavor: ${{ inputs.flavor }}
           labels: ${{ inputs.labels }}
 
-      - name: Build and push by digest
-        id: build
+      - name: Build and push with BoringCache
+        if: env.BORINGCACHE_ENABLED == 'true'
+        id: build_boringcache
+        uses: boringcache/one@e24257b122813ad11d53b9ed024b474ca4946ad2 # v1.19.1
+        with:
+          cli-version: v1.19.1
+          trust-policy: auto
+          setup: none
+          mode: docker
+          context: .
+          dockerfile: ${{ inputs.file_to_build }}
+          image: ${{ env.PRIMARY_IMAGE_NAME }}
+          build-args: |
+            MASTODON_VERSION_PRERELEASE=${{ inputs.version_prerelease }}
+            MASTODON_VERSION_METADATA=${{ inputs.version_metadata }}
+            SOURCE_COMMIT=${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          no-cache: true
+          outputs: type=image,"name=${{ env.IMAGE_NAMES }}",push-by-digest=true,name-canonical=true,push=${{ inputs.push_to_images != '' }}
+          docker-tool-cache: ${{ inputs.file_to_build == 'Dockerfile' && 'ccache' || '' }}
+          docker-mount-cache: true
+          diagnostics: summary
+          fail-on-cache-error: false
+          metadata-hints: |
+            workflow=build-container-image
+            dockerfile=${{ inputs.file_to_build }}
+        env:
+          BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
+          BORINGCACHE_SAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
+
+      - name: Build and push with GitHub Actions
+        if: env.BORINGCACHE_ENABLED != 'true'
+        id: build_default
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -94,9 +139,11 @@ jobs:
 
       - name: Export digest
         if: ${{ inputs.push_to_images != '' }}
+        env:
+          IMAGE_DIGEST: ${{ steps.build_boringcache.outputs.digest || steps.build_default.outputs.digest }}
         run: |
           mkdir -p "${{ runner.temp }}/digests"
-          digest="${{ steps.build.outputs.digest }}"
+          digest="$IMAGE_DIGEST"
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest

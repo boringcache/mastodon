@@ -89,8 +89,8 @@ COPY ./streaming /opt/mastodon/streaming
 
 RUN \
   # Mount local Corepack and Yarn caches from Docker buildx caches
-  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/corepack,sharing=locked \
-  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/yarn,sharing=locked \
+  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/root/.cache/node/corepack,sharing=locked \
+  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/root/.yarn/berry/cache,sharing=locked \
   # Remove pre-installed Yarn binaries (only present on Node <26)
   rm -f /usr/local/bin/yarn*; \
   # Install Corepack
@@ -98,8 +98,8 @@ RUN \
 
 RUN \
   # Mount Corepack and Yarn caches from Docker buildx caches
-  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/corepack,sharing=locked \
-  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/yarn,sharing=locked \
+  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/root/.cache/node/corepack,sharing=locked \
+  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/root/.yarn/berry/cache,sharing=locked \
   # Install Node packages
   yarn workspaces focus --production @mastodon/streaming;
 

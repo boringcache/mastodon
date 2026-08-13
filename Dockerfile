@@ -158,6 +158,11 @@ RUN \
 FROM ${BASE_REGISTRY}/ruby:${RUBY_VERSION}-slim-${DEBIAN_VERSION} AS media-build
 
 ARG TARGETPLATFORM
+ARG CCACHE_VERSION=4.13.6
+ARG CCACHE_STORAGE_HTTP_VERSION=0.8
+
+# BoringCache supplies session-only remote storage settings when tool caching is enabled.
+ENV CC="ccache cc" CXX="ccache c++" CCACHE_COMPILERCHECK=content
 
 # Set default shell used for running commands
 SHELL ["/bin/bash", "-o", "pipefail", "-o", "errexit", "-c"]
@@ -174,6 +179,8 @@ RUN \
   autoconf \
   automake \
   build-essential \
+  ca-certificates \
+  curl \
   libtool \
   meson \
   nasm \
@@ -205,6 +212,29 @@ RUN \
   libx265-dev \
   ;
 
+RUN set -eux; \
+  arch="$(dpkg --print-architecture)"; \
+  case "$arch" in \
+    amd64) ccache_arch=x86_64; helper_arch=amd64; ccache_sha=567b1b648411819590f918f045218c92da14418bdec3b30db94a3b4f5d77cf13; helper_sha=2c2cfafa39f5a4628201ccc11c81829197519159aa128fe00ea251f1f4f2461c ;; \
+    arm64) ccache_arch=aarch64; helper_arch=arm64; ccache_sha=fae67fb810e1f0d390409af6603355483572229e19183e68574cd0f851a6fb98; helper_sha=49587fb0534f5c6265fd1008267af795885f8297c6c51213708da74e4de9d475 ;; \
+    *) echo "unsupported ccache architecture: ${arch}" >&2; exit 1 ;; \
+  esac; \
+  ccache_archive="ccache-${CCACHE_VERSION}-linux-${ccache_arch}-glibc.tar.gz"; \
+  helper_archive="ccache-storage-http-go-${CCACHE_STORAGE_HTTP_VERSION}-linux-${helper_arch}.tar.gz"; \
+  curl -fsSL --retry 5 "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/${ccache_archive}" -o "/tmp/${ccache_archive}"; \
+  echo "${ccache_sha}  /tmp/${ccache_archive}" | sha256sum --check; \
+  curl -fsSL --retry 5 "https://github.com/ccache/ccache-storage-http-go/releases/download/v${CCACHE_STORAGE_HTTP_VERSION}/${helper_archive}" -o "/tmp/${helper_archive}"; \
+  echo "${helper_sha}  /tmp/${helper_archive}" | sha256sum --check; \
+  tar xzf "/tmp/${ccache_archive}" -C /tmp; \
+  tar xzf "/tmp/${helper_archive}" -C /tmp; \
+  install -m 0755 "/tmp/ccache-${CCACHE_VERSION}-linux-${ccache_arch}-glibc/ccache" /usr/local/bin/ccache; \
+  install -m 0755 "/tmp/ccache-storage-http-go-${CCACHE_STORAGE_HTTP_VERSION}-linux-${helper_arch}/ccache-storage-http" /usr/local/bin/ccache-storage-http; \
+  ccache --version; \
+  helper_version="$(ccache-storage-http --version 2>&1 || true)"; \
+  printf "%s\n" "$helper_version"; \
+  printf "%s\n" "$helper_version" | grep -F "Version: ${CCACHE_STORAGE_HTTP_VERSION}"; \
+  rm -rf /tmp/ccache-*
+
 # Create temporary libvips specific build layer
 FROM media-build AS libvips
 
@@ -227,7 +257,7 @@ RUN meson setup build --prefix /usr/local/libvips --libdir=lib -Ddeprecated=fals
 WORKDIR /usr/local/libvips/src/vips-${VIPS_VERSION}/build
 
 # Compile and install libvips
-RUN ninja && ninja install
+RUN ninja && ninja install && ccache --show-stats
 
 # Create temporary ffmpeg specific build layer
 FROM media-build AS ffmpeg
@@ -247,7 +277,15 @@ WORKDIR /usr/local/ffmpeg/src/ffmpeg-${FFMPEG_VERSION}
 
 # Configure and compile ffmpeg
 RUN \
+  configure_compiler_args=(); \
+  if [ -n "${CC:-}" ]; then \
+    configure_compiler_args+=(--cc="$CC"); \
+  fi; \
+  if [ -n "${CXX:-}" ]; then \
+    configure_compiler_args+=(--cxx="$CXX"); \
+  fi; \
   ./configure \
+  "${configure_compiler_args[@]}" \
   --prefix=/usr/local/ffmpeg \
   --toolchain=hardened \
   --disable-debug \
@@ -272,10 +310,16 @@ RUN \
   --enable-version3 \
   ; \
   make -j"$(nproc)"; \
-  make install;
+  make install; \
+  ccache --show-stats
 
 # Create temporary build layer from base image for Ruby dependencies
 FROM ruby AS ruby-build
+
+# Native gem extensions use the same compiler cache as the media stages.
+COPY --from=media-build /usr/local/bin/ccache /usr/local/bin/ccache
+COPY --from=media-build /usr/local/bin/ccache-storage-http /usr/local/bin/ccache-storage-http
+ENV CC="ccache cc" CXX="ccache c++" CCACHE_COMPILERCHECK=content
 
 ARG TARGETPLATFORM
 
@@ -314,8 +358,8 @@ COPY --from=libvips /usr/local/libvips/include /usr/local/include
 RUN ldconfig
 
 RUN \
-  # Mount Ruby Gem caches
-  --mount=type=cache,id=gem-cache-${TARGETPLATFORM},target=/usr/local/bundle/cache/,sharing=locked \
+  # Mount the installed bundle, isolated by architecture for native extensions
+  --mount=type=cache,id=bundle-cache-${TARGETPLATFORM},target=/usr/local/bundle,sharing=locked \
   # Configure bundle to prevent changes to Gemfile and Gemfile.lock
   bundle config set --global frozen "true"; \
   # Configure bundle to not cache downloaded Gems
@@ -325,7 +369,13 @@ RUN \
   # Configure bundle to not warn about root user
   bundle config set silence_root_warning "true"; \
   # Download and install required Gems
-  bundle install -j"$(nproc)";
+  bundle install -j"$(nproc)"; \
+  # Remove gems no longer referenced by the lockfile
+  bundle clean --force; \
+  ccache --show-stats; \
+  # Cache mounts are not committed to image layers, so preserve the installed bundle
+  mkdir -p /opt/bundle; \
+  cp -a /usr/local/bundle/. /opt/bundle/
 
 # Create temporary assets build layer from build layer
 FROM ruby-build AS precompiler
@@ -341,8 +391,8 @@ COPY --from=node /usr/local/lib /usr/local/lib
 
 RUN \
   # Mount local Corepack and Yarn caches from Docker buildx caches
-  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/corepack,sharing=locked \
-  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/yarn,sharing=locked \
+  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/root/.cache/node/corepack,sharing=locked \
+  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/root/.yarn/berry/cache,sharing=locked \
   # Remove pre-installed Yarn binaries (only present on Node <26)
   rm -f /usr/local/bin/yarn*; \
   # Install Corepack
@@ -350,8 +400,8 @@ RUN \
 
 # hadolint ignore=DL3008
 RUN \
-  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/corepack,sharing=locked \
-  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/usr/local/share/.cache/yarn,sharing=locked \
+  --mount=type=cache,id=corepack-cache-${TARGETPLATFORM},target=/root/.cache/node/corepack,sharing=locked \
+  --mount=type=cache,id=yarn-cache-${TARGETPLATFORM},target=/root/.yarn/berry/cache,sharing=locked \
   # Install Node.js packages
   yarn workspaces focus --production @mastodon/mastodon;
 
@@ -360,7 +410,7 @@ COPY --from=libvips /usr/local/libvips/bin /usr/local/bin
 COPY --from=libvips /usr/local/libvips/lib /usr/local/lib
 # Copy bundler packages into layer for precompiler
 COPY --from=bundler /opt/mastodon /opt/mastodon/
-COPY --from=bundler /usr/local/bundle/ /usr/local/bundle/
+COPY --from=bundler /opt/bundle/ /usr/local/bundle/
 
 RUN \
   ldconfig; \
@@ -382,7 +432,7 @@ COPY . /opt/mastodon/
 COPY --from=precompiler /opt/mastodon/public/packs /opt/mastodon/public/packs
 COPY --from=precompiler /opt/mastodon/public/assets /opt/mastodon/public/assets
 # Copy bundler components to layer
-COPY --from=bundler /usr/local/bundle/ /usr/local/bundle/
+COPY --from=bundler /opt/bundle/ /usr/local/bundle/
 # Copy libvips components to layer
 COPY --from=libvips /usr/local/libvips/bin /usr/local/bin
 COPY --from=libvips /usr/local/libvips/lib /usr/local/lib
