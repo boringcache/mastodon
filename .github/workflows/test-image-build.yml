@@ -22,6 +22,8 @@ jobs:
     with:
       file_to_build: Dockerfile
       cache: true
+    secrets:
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
 
   build-image-streaming:
     concurrency:
@@ -32,3 +34,5 @@ jobs:
     with:
       file_to_build: streaming/Dockerfile
       cache: true
+    secrets:
+      BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}

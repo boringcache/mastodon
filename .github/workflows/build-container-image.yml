@@ -18,6 +18,15 @@ on:
         type: string
       file_to_build:
         type: string
+    secrets:
+      BORINGCACHE_RESTORE_TOKEN:
+        required: false
+      BORINGCACHE_SAVE_TOKEN:
+        required: false
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
 
 # This builds multiple images with one runner each, allowing us to build for multiple architectures
 # using Github's runners.
@@ -25,19 +34,20 @@ on:
 # https://docs.docker.com/build/ci/github-actions/multi-platform/#distribute-build-across-multiple-runners
 #
 # Release, nightly, and security builds keep their existing cache:false contract:
-# every Docker step runs, including apt update. Repositories can opt in to BoringCache
-# compiler and cache-mount reuse with BORINGCACHE_ENABLED=true plus restore/save tokens.
-# Without that variable or either token, the existing GitHub Actions path remains active.
+# every Docker step runs, including apt update. Cache-enabled PR image tests can restore
+# Docker layers as well as compiler and cache-mount entries, but never publish them.
+# Without BORINGCACHE_ENABLED=true and an appropriate token, the existing GitHub Actions
+# path remains active.
 jobs:
   # Build each (amd64 and arm64) image separately
   build-image:
     runs-on: ${{ startsWith(matrix.platform, 'linux/arm') && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     env:
-      # Release, nightly, and security builds deliberately run every Docker step.
-      # BoringCache only restores compiler outputs and explicit cache mounts.
+      # cache:false builds only restore compiler outputs and explicit cache mounts.
+      # cache:true builds may also restore Docker layers, but require a restore token.
       # Keep the existing provenance:false image shape when BoringCache owns Buildx.
       BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
-      BORINGCACHE_ENABLED: ${{ inputs.cache == false && vars.BORINGCACHE_ENABLED == 'true' && (secrets.BORINGCACHE_RESTORE_TOKEN != '' || (github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN != '')) && 'true' || 'false' }}
+      BORINGCACHE_ENABLED: ${{ vars.BORINGCACHE_ENABLED == 'true' && (secrets.BORINGCACHE_RESTORE_TOKEN != '' || (inputs.cache == false && github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN != '')) && 'true' || 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +110,7 @@ jobs:
           mode: docker
           context: .
           dockerfile: ${{ inputs.file_to_build }}
-          image: ${{ env.PRIMARY_IMAGE_NAME }}
+          image: ${{ env.PRIMARY_IMAGE_NAME || 'mastodon-build' }}
           build-args: |
             MASTODON_VERSION_PRERELEASE=${{ inputs.version_prerelease }}
             MASTODON_VERSION_METADATA=${{ inputs.version_metadata }}
@@ -108,7 +118,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           platforms: ${{ matrix.platform }}
           provenance: false
-          no-cache: true
+          no-cache: ${{ inputs.cache == false }}
           outputs: type=image,"name=${{ env.IMAGE_NAMES }}",push-by-digest=true,name-canonical=true,push=${{ inputs.push_to_images != '' }}
           docker-tool-cache: ${{ inputs.file_to_build == 'Dockerfile' && 'ccache' || '' }}
           docker-mount-cache: true
@@ -119,7 +129,8 @@ jobs:
             dockerfile=${{ inputs.file_to_build }}
         env:
           BORINGCACHE_RESTORE_TOKEN: ${{ secrets.BORINGCACHE_RESTORE_TOKEN }}
-          BORINGCACHE_SAVE_TOKEN: ${{ github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
+          # Trusted production builds seed caches; cache-enabled PR builds are restore-only.
+          BORINGCACHE_SAVE_TOKEN: ${{ inputs.cache == false && github.event_name != 'pull_request' && secrets.BORINGCACHE_SAVE_TOKEN || '' }}
 
       - name: Build and push with GitHub Actions
         if: env.BORINGCACHE_ENABLED != 'true'

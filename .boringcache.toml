@@ -4,10 +4,10 @@ workspace = "mastadon/mastodon"
 metadata-hints = ["project=mastodon"]
 
 [adapters.docker]
-tag = "mastodon-release-images"
+tag = "mastodon-container-images"
 cache-mode = "max"
-metadata-hints = ["lane=release-images"]
+metadata-hints = ["lane=container-images"]
 
 [adapters.ccache]
-tag = "mastodon-release-ccache"
-metadata-hints = ["lane=release-images", "tool=ccache"]
+tag = "mastodon-container-ccache"
+metadata-hints = ["lane=container-images", "tool=ccache"]
