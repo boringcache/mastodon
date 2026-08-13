@@ -356,8 +356,8 @@ COPY --from=libvips /usr/local/libvips/include /usr/local/include
 RUN ldconfig
 
 RUN \
-  # Mount Ruby Gem caches
-  --mount=type=cache,id=gem-cache-${TARGETPLATFORM},target=/usr/local/bundle/cache/,sharing=locked \
+  # Mount the installed bundle, isolated by architecture for native extensions
+  --mount=type=cache,id=bundle-cache-${TARGETPLATFORM},target=/usr/local/bundle,sharing=locked \
   # Configure bundle to prevent changes to Gemfile and Gemfile.lock
   bundle config set --global frozen "true"; \
   # Configure bundle to not cache downloaded Gems
@@ -368,7 +368,12 @@ RUN \
   bundle config set silence_root_warning "true"; \
   # Download and install required Gems
   bundle install -j"$(nproc)"; \
-  ccache --show-stats
+  # Remove gems no longer referenced by the lockfile
+  bundle clean --force; \
+  ccache --show-stats; \
+  # Cache mounts are not committed to image layers, so preserve the installed bundle for later stages
+  mkdir -p /opt/bundle; \
+  cp -a /usr/local/bundle/. /opt/bundle/
 
 # Create temporary assets build layer from build layer
 FROM ruby-build AS precompiler
@@ -403,7 +408,7 @@ COPY --from=libvips /usr/local/libvips/bin /usr/local/bin
 COPY --from=libvips /usr/local/libvips/lib /usr/local/lib
 # Copy bundler packages into layer for precompiler
 COPY --from=bundler /opt/mastodon /opt/mastodon/
-COPY --from=bundler /usr/local/bundle/ /usr/local/bundle/
+COPY --from=bundler /opt/bundle/ /usr/local/bundle/
 
 RUN \
   ldconfig; \
@@ -425,7 +430,7 @@ COPY . /opt/mastodon/
 COPY --from=precompiler /opt/mastodon/public/packs /opt/mastodon/public/packs
 COPY --from=precompiler /opt/mastodon/public/assets /opt/mastodon/public/assets
 # Copy bundler components to layer
-COPY --from=bundler /usr/local/bundle/ /usr/local/bundle/
+COPY --from=bundler /opt/bundle/ /usr/local/bundle/
 # Copy libvips components to layer
 COPY --from=libvips /usr/local/libvips/bin /usr/local/bin
 COPY --from=libvips /usr/local/libvips/lib /usr/local/lib
