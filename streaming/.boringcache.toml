@@ -1,0 +1,9 @@
+workspace = "mastadon/mastodon"
+
+[proxy]
+metadata-hints = ["project=mastodon"]
+
+[adapters.docker]
+tag = "mastodon-container-streaming"
+cache-mode = "max"
+metadata-hints = ["lane=container-images", "image=streaming"]

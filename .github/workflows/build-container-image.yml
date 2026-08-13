@@ -108,7 +108,8 @@ jobs:
           trust-policy: auto
           setup: none
           mode: docker
-          context: .
+          working-directory: ${{ inputs.file_to_build == 'Dockerfile' && '.' || 'streaming' }}
+          context: ${{ inputs.file_to_build == 'Dockerfile' && '.' || '..' }}
           dockerfile: ${{ inputs.file_to_build }}
           image: ${{ env.PRIMARY_IMAGE_NAME || 'mastodon-build' }}
           build-args: |

@@ -4,10 +4,10 @@ workspace = "mastadon/mastodon"
 metadata-hints = ["project=mastodon"]
 
 [adapters.docker]
-tag = "mastodon-container-images"
+tag = "mastodon-container"
 cache-mode = "max"
-metadata-hints = ["lane=container-images"]
+metadata-hints = ["lane=container-images", "image=mastodon"]
 
 [adapters.ccache]
 tag = "mastodon-container-ccache"
-metadata-hints = ["lane=container-images", "tool=ccache"]
+metadata-hints = ["lane=container-images", "image=mastodon", "tool=ccache"]
