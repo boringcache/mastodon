@@ -18,6 +18,39 @@ env:
   DOCKER_BUILD_SUMMARY: "false"
 
 jobs:
+  upstream-no-cache:
+    name: Upstream cache:false / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build with upstream cache:false behavior
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: mastodon-upstream-no-cache:test
+          load: false
+          push: false
+          provenance: false
+          build-args: |
+            MASTODON_VERSION_PRERELEASE=boringcache
+            MASTODON_VERSION_METADATA=${{ github.sha }}
+            SOURCE_COMMIT=${{ github.sha }}
+
   github-actions-cache:
     name: GitHub Actions cache / ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}

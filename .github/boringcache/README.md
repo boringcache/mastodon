@@ -4,8 +4,10 @@ This branch builds Mastodon's production `Dockerfile` on the same native
 GitHub-hosted runners used by the upstream multi-architecture workflow:
 `ubuntu-24.04` for `linux/amd64` and `ubuntu-24.04-arm` for `linux/arm64`.
 
-The workflow keeps four independent cache cohorts:
+The workflow keeps five independent cache cohorts:
 
+- Upstream `cache: false` uses a fresh Buildx builder with no `cache-from` or
+  `cache-to`, matching Mastodon's release workflow setting.
 - GitHub Actions cache uses Mastodon's upstream `type=gha` cache shape and
   `build-${hashFiles('Dockerfile')}-${platform}` scope.
 - BoringCache layer cache reads the plan in `layer/.boringcache.toml`.
